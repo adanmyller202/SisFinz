@@ -1,0 +1,6 @@
+{
+  "name": "Money Challenge - Desafio dos Quadrados",
+  "description": "Transforme sua economia de dinheiro em um desafio visual e interativo. Acompanhe metas de economia, complete quadrados numerados e alcance seus objetivos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

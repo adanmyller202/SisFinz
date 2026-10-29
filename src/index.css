@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    height: 100%;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+    height: 100%;
+    min-height: 100%;
+    min-height: -webkit-fill-available;
+  }
+
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .font-mono-numbers {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Prevent 300ms delay and unintended double-tap zoom across touch devices */
+  button,
+  input,
+  select,
+  textarea,
+  a {
+    touch-action: manipulation;
+  }
+
+  /* Auto-scroll clearance when keyboard opens on mobile devices */
+  input,
+  select,
+  textarea {
+    scroll-margin-top: 4.5rem;
+    scroll-margin-bottom: 4.5rem;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+/* Global iOS/Mobile Auto-Zoom Prevention:
+   Safari and WebKit engines trigger an automatic viewport zoom if any focused
+   input/select/textarea has a computed font-size under 16px.
+   Enforcing 16px minimum on touch / mobile / tablet viewports (< 850px) completely
+   eliminates auto-zoom while preserving clean layout and responsiveness. */
+@media screen and (max-width: 850px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Touch-friendly modal and drawer scrolling with global Safe Area protection for iOS/PWA */
+div[role="dialog"] {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-top: max(0.625rem, env(safe-area-inset-top, 0px)) !important;
+  padding-bottom: max(0.625rem, env(safe-area-inset-bottom, 0px)) !important;
+  padding-left: max(0.625rem, env(safe-area-inset-left, 0px)) !important;
+  padding-right: max(0.625rem, env(safe-area-inset-right, 0px)) !important;
+}
+
+/* iOS Safe Area Helper Utilities */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+.pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}

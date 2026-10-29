@@ -1,0 +1,236 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSafeString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isSafeNumber(val, minVal, maxVal) {
+      return val is number && val >= minVal && val <= maxVal;
+    }
+
+    // Helper to verify bilateral connection exists between two distinct users
+    function hasActiveConnection(userA, userB) {
+      return userA != userB && (
+        exists(/databases/$(database)/documents/shared_connections/$( 'conn_' + userA + '_' + userB )) ||
+        exists(/databases/$(database)/documents/shared_connections/$( 'conn_' + userB + '_' + userA ))
+      );
+    }
+
+    // Helper ensuring hiddenForUsers can only add/remove the caller's own UID
+    // and cannot be combined with financial, shares or metadata tampering
+    function isValidHiddenForUsersUpdate() {
+      let incomingHidden = request.resource.data.get('hiddenForUsers', []).toSet();
+      let existingHidden = resource.data.get('hiddenForUsers', []).toSet();
+      let added = incomingHidden.difference(existingHidden);
+      let removed = existingHidden.difference(incomingHidden);
+
+      return (incomingHidden == existingHidden) || (
+        added.hasOnly([request.auth.uid]) &&
+        removed.hasOnly([request.auth.uid]) &&
+        request.resource.data.amount == resource.data.amount &&
+        request.resource.data.title == resource.data.title &&
+        request.resource.data.splitMethod == resource.data.splitMethod &&
+        request.resource.data.percentages == resource.data.percentages &&
+        request.resource.data.shares == resource.data.shares
+      );
+    }
+
+    // 2. User profile and private subcollections
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // Private subcollections default: strictly private to owner
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Partner can ONLY create a shared transfer income record for an active partner
+      match /incomes/{incomeId} {
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isOwner(userId) || (
+          isSignedIn() &&
+          isValidId(incomeId) &&
+          request.resource.data.userId == userId &&
+          request.resource.data.category == 'Contas Compartilhadas' &&
+          isSafeNumber(request.resource.data.amount, 0.01, 1000000000) &&
+          hasActiveConnection(request.auth.uid, userId)
+        );
+      }
+    }
+
+    // 3. User directory (Private to owner, client-side listing prohibited)
+    match /user_directory/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // BLOCK MASS ENUMERATION!
+      allow write: if isOwner(userId) &&
+        isValidId(userId) &&
+        request.resource.data.uid == userId &&
+        isSafeString(request.resource.data.email, 3, 150) &&
+        isSafeString(request.resource.data.displayName, 1, 150);
+    }
+
+    // 4. Exact email lookup directory for partner invitations
+    // Strictly backend-only. Direct client reads (both get and list) are completely prohibited.
+    match /user_directory_lookup/{emailHash} {
+      allow read: if false; // CLIENT READ ACCESS COMPLETELY BLOCKED
+      allow write: if isSignedIn() &&
+        isValidId(emailHash) &&
+        request.resource.data.uid == request.auth.uid &&
+        isSafeString(request.resource.data.email, 3, 150) &&
+        isSafeString(request.resource.data.displayName, 1, 150);
+    }
+
+    // 5. Shared Connections between two users
+    match /shared_connections/{connectionId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+      
+      allow create: if isSignedIn() &&
+        isValidId(connectionId) &&
+        request.resource.data.id == connectionId &&
+        request.resource.data.members is list &&
+        request.resource.data.members.size() == 2 &&
+        request.auth.uid in request.resource.data.members &&
+        request.resource.data.status in ['active', 'pending', 'inactive'];
+
+      allow update: if isSignedIn() &&
+        request.auth.uid in resource.data.members &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.members == resource.data.members &&
+        request.resource.data.status in ['active', 'pending', 'inactive'];
+
+      allow delete: if isSignedIn() && request.auth.uid in resource.data.members;
+    }
+
+    // 6. Shared Invitations
+    match /shared_invitations/{invitationId} {
+      allow read: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+
+      allow create: if isSignedIn() &&
+        isValidId(invitationId) &&
+        request.resource.data.id == invitationId &&
+        request.resource.data.fromUserId == request.auth.uid &&
+        request.resource.data.toUserId is string &&
+        request.resource.data.toUserId != request.auth.uid &&
+        request.resource.data.status == 'pending';
+
+      allow update: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      ) &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.fromUserId == resource.data.fromUserId &&
+        request.resource.data.toUserId == resource.data.toUserId &&
+        request.resource.data.status in ['pending', 'accepted', 'rejected', 'canceled'];
+
+      allow delete: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+    }
+
+    // 7. Shared Bills (Global delete permitted ONLY by createdBy; strict hiddenForUsers guard)
+    match /shared_bills/{billId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+
+      allow create: if isSignedIn() &&
+        isValidId(billId) &&
+        request.resource.data.id == billId &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.members is list &&
+        request.resource.data.members.size() == 2 &&
+        request.auth.uid in request.resource.data.members &&
+        isSafeNumber(request.resource.data.amount, 0.01, 1000000000) &&
+        isSafeString(request.resource.data.title, 1, 200) &&
+        hasActiveConnection(request.resource.data.members[0], request.resource.data.members[1]);
+
+      allow update: if isSignedIn() &&
+        request.auth.uid in resource.data.members &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.members == resource.data.members &&
+        isSafeNumber(request.resource.data.amount, 0.01, 1000000000) &&
+        isSafeString(request.resource.data.title, 1, 200) &&
+        isValidHiddenForUsersUpdate();
+
+      // CRITICAL: ONLY createdBy can permanently delete the shared bill document for everyone
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.createdBy;
+    }
+
+    // 8. Shared Transfers (Extrato) - Absolute immutability once created
+    match /shared_transfers/{transferId} {
+      allow read: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+
+      allow create: if isSignedIn() &&
+        isValidId(transferId) &&
+        request.resource.data.id == transferId &&
+        request.resource.data.fromUserId == request.auth.uid &&
+        request.resource.data.toUserId is string &&
+        request.resource.data.toUserId != request.auth.uid &&
+        isSafeNumber(request.resource.data.amount, 0.01, 1000000000) &&
+        request.resource.data.status in ['completed', 'pending'] &&
+        request.resource.data.type in ['share_transfer', 'reimbursement'] &&
+        hasActiveConnection(request.auth.uid, request.resource.data.toUserId);
+
+      allow update, delete: if false;
+    }
+
+    // 9. Shared Notifications
+    match /shared_notifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+        isValidId(notificationId) &&
+        request.resource.data.id == notificationId &&
+        request.resource.data.fromUserId == request.auth.uid &&
+        request.resource.data.userId is string &&
+        request.resource.data.userId.size() > 0 &&
+        request.resource.data.type in [
+          'invitation_received', 'invitation_accepted', 'invitation_rejected',
+          'bill_created', 'bill_updated', 'bill_paid',
+          'transfer_received', 'share_bill_request', 'share_bill_accepted', 'share_bill_rejected'
+        ] &&
+        isSafeString(request.resource.data.title, 1, 200) &&
+        isSafeString(request.resource.data.message, 1, 1000);
+
+      allow update: if isSignedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.fromUserId == resource.data.fromUserId &&
+        request.resource.data.type == resource.data.type;
+
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // 10. Password Resets (Server-side handled via REST)
+    match /password_resets/{resetId} {
+      allow get: if true;
+      allow create, update: if true;
+      allow list, delete: if false;
+    }
+  }
+}
